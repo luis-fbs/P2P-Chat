@@ -1,0 +1,3 @@
+GROUP_IP = "localhost"
+GROUP_PORT = 5678
+PEER_PORT = 5679
