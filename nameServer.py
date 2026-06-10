@@ -37,11 +37,22 @@ class NameServer:
 
     # Operations
     def bind(self, request):
-        name, address = request["name"], request["address"]
+        name, address = request.get("name"), request.get("address")
         if name in self.bindings:
             return self._error(f"Name '{name}' already bound.")
         self.bindings[name] = address
         return self._ok(f"'{name}' bound to {address}.", None)
+
+    def lookup(self, request):
+        name = request.get("name")
+        if name not in self.bindings:
+            return self._error(f"Name '{name}' not found.")
+        return self.bindings[name]
+
+    def handle_unknown(self, request):
+        return self._error("Unknown operation.")
+
+
 
 
 if __name__ == "__main__":
