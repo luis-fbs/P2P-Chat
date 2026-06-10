@@ -48,12 +48,28 @@ class NameServer:
         if name not in self.bindings:
             return self._error(f"Name '{name}' not found.")
         del self.bindings[name]
+        return self._ok(f"'{name}' unbound.", None)
 
     def lookup(self, request):
         name = request.get("name")
         if name not in self.bindings:
             return self._error(f"Name '{name}' not found.")
-        return self.bindings[name]
+        return self._ok("", self.bindings[name])
+
+    def register(self, request):
+        name = request.get("name")
+        if name not in self.bindings:
+            return self._error(f"Name '{name}' not found.")
+        type_ = request.get("type")
+        self.types[name] = type_
+        return self._ok(f"'{name}' registered as {type_}.", None)
+
+    def unregister(self, request):
+        name = request.get("name")
+        if name not in self.bindings:
+            return self._error(f"Name '{name}' not found.")
+        del self.bindings[name]
+        return self._ok(f"'{name}' unregistered.", None)
 
     def handle_unknown(self, request):
         return self._error("Unknown operation.")
