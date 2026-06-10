@@ -71,6 +71,11 @@ class NameServer:
         del self.bindings[name]
         return self._ok(f"'{name}' unregistered.", None)
 
+    def discover(self, request):
+        type_ = request.get("type")
+        response = [ (name, self.bindings[name]) for name, type__ in self.types.items() if type__ == type_ ]
+        return self._ok("", response)
+
     def handle_unknown(self, request):
         return self._error("Unknown operation.")
 
