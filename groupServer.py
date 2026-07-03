@@ -1,139 +1,103 @@
-from socket import *
-import pickle
-
+import zmq
 
 import constants
 from group import Group
-from peer import Peer
+from net import get_public_ip
 
 
 class GroupServer:
-    def __init__(self, port = constants.GROUP_PORT):
+    def __init__(self, ns_address=constants.NS_ADDRESS, port=constants.GS_PORT):
+        self.groups = {}
+        self.ns_address = ns_address
         self.port = port
-        self.groups = []
+        self.ip = get_public_ip()
+        self.address = f"tcp://{self.ip}:{self.port}"
 
-        self.serverSock = socket(AF_INET, SOCK_STREAM)
-        self.serverSock.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
-        self.serverSock.bind(('0.0.0.0', self.port))
-        self.serverSock.listen()
+        self.context = zmq.Context()
+        self.socket = self.context.socket(zmq.REP)
+        self.socket.bind(f"tcp://*:{self.port}")
 
         self.handlers = {
-            "register_group": self.handle_group_register,
-            "unregister_group": self.handle_group_unregister,
-            "register_peer": self.handle_peer_register,
-            "unregister_peer": self.handle_peer_unregister,
-            "list_groups": self.handle_group_list,
-            "list_peers": self.handle_peer_list
+            "register_group": self.register_group,
+            "unregister_group": self.unregister_group,
+            "list_groups": self.list_groups,
+            "register_peer": self.register_peer,
+            "unregister_peer": self.unregister_peer,
+            "list_peers": self.list_peers,
         }
 
-   # main
+        self.register_in_name_service()
+
+    def register_in_name_service(self):
+        sock = self.context.socket(zmq.REQ)
+        sock.setsockopt(zmq.LINGER, 0)
+        sock.setsockopt(zmq.RCVTIMEO, 3000)
+        sock.connect(self.ns_address)
+        try:
+            for request in (
+                {"operation": "unbind", "name": constants.GS_NAME},
+                {"operation": "bind", "name": constants.GS_NAME, "address": self.address},
+                {"operation": "register", "name": constants.GS_NAME, "type": "service"},
+            ):
+                sock.send_json(request)
+                sock.recv_json()
+        finally:
+            sock.close()
+        print(f"GroupServer registered as '{constants.GS_NAME}' at {self.address}")
+
     def serve(self):
         while True:
-            conn, addr = self.serverSock.accept()
-            try:
-                self.handle_connection(conn)
-            finally:
-                conn.close()
-
-    def handle_connection(self, conn):
-        try:
-            msg = conn.recv(2048)
-            if not msg:
-                return
-
-            request = pickle.loads(msg)
+            request = self.socket.recv_json()
             operation = request.get("operation")
-
             handler = self.handlers.get(operation, self.handle_unknown)
-            handler(request, conn)
+            self.socket.send_json(handler(request))
 
-        except Exception as e:
-            print("Error handling connection:", e)
+    def _ok(self, message, value=None):
+        return {"status": "ok", "message": message, "return": value}
 
-    # Operations
-    def handle_group_register(self, request, conn):
-        group = request.get("group")
-        message = ""
-        if group not in self.groups:
-            self.groups.append(group)
-            message = f"Group {group.name} registered."
+    def _error(self, message):
+        return {"status": "error", "message": message}
 
-        response = {
-            "message": message or "Group already registered.",
-        }
-        conn.send(pickle.dumps(response))
+    def register_group(self, request):
+        name = request.get("group")
+        if name in self.groups:
+            return self._ok(f"Group '{name}' already exists.")
+        self.groups[name] = Group(name)
+        return self._ok(f"Group '{name}' registered.")
+
+    def unregister_group(self, request):
+        name = request.get("group")
+        if name not in self.groups:
+            return self._error(f"Group '{name}' not found.")
+        del self.groups[name]
+        return self._ok(f"Group '{name}' unregistered.")
+
+    def list_groups(self, request):
+        return self._ok("", list(self.groups.keys()))
+
+    def register_peer(self, request):
+        name, peer = request.get("group"), request.get("peer")
+        if name not in self.groups:
+            return self._error(f"Group '{name}' not found.")
+        self.groups[name].add_peer(peer)
+        return self._ok(f"Peer '{peer}' joined '{name}'.")
+
+    def unregister_peer(self, request):
+        name, peer = request.get("group"), request.get("peer")
+        if name not in self.groups:
+            return self._error(f"Group '{name}' not found.")
+        self.groups[name].remove_peer(peer)
+        return self._ok(f"Peer '{peer}' left '{name}'.")
+
+    def list_peers(self, request):
+        name = request.get("group")
+        if name not in self.groups:
+            return self._error(f"Group '{name}' not found.")
+        return self._ok("", self.groups[name].get_peers())
+
+    def handle_unknown(self, request):
+        return self._error("Unknown operation.")
 
 
-    def handle_group_unregister(self, request, conn):
-        group = request.get("group")
-        message = ""
-        if group in self.groups:
-            self.groups.remove(group)
-            message = f"Group {group.name} unregistered."
-
-        response = {
-            "message": message or "Group doesn't exist.",
-        }
-        conn.send(pickle.dumps(response))
-
-    def handle_peer_register(self, request, conn):
-        group = request.get("group")
-        peer = request.get("peer")
-        try:
-            g_index = self.groups.index(group)
-            self.groups[g_index].add_peer(peer)
-            message = f"Peer {peer.user.nickname} ({peer.ip}:{peer.port}) registered."
-
-        except ValueError:
-            message = f"Group {group.name} not registered."
-
-        finally:
-            response = {
-                "message": message
-            }
-            conn.send(pickle.dumps(response))
-
-    def handle_peer_unregister(self, request, conn):
-        group = request.get("group")
-        peer = request.get("peer")
-        try:
-            g_index = self.groups.index(group)
-            self.groups[g_index].remove_peer(peer)
-            message = f"Peer {peer} unregistered."
-
-        except ValueError:
-            message = f"Group {group.name} not registered."
-
-        finally:
-            response = {
-                "message": message
-            }
-            conn.send(pickle.dumps(response))
-
-    def handle_group_list(self, request, conn):
-        response = {"message": [group.name for group in self.groups]}
-        conn.send(pickle.dumps(response))
-
-    def handle_peer_list(self, request, conn):
-        group = request.get("group")
-        message = ""
-        try:
-            g_index = self.groups.index(group)
-            peer_list = self.groups[g_index].get_peers()
-            message = [(peer.user.nickname, peer.ip, peer.port) for peer in peer_list]
-
-        except ValueError:
-            message = f"Group {group.name} not registered."
-
-        finally:
-            response = {
-                "message": message
-            }
-            conn.send(pickle.dumps(response))
-
-    def handle_unknown(self, request, conn):
-        response = {"message": "Unknown operation"}
-        conn.send(pickle.dumps(response))
-
-# Run
-GroupServer().serve()
+if __name__ == "__main__":
+    GroupServer().serve()

@@ -1,3 +1,12 @@
-GROUP_IP = "localhost"
-GROUP_PORT = 5678
 PEER_PORT = 5679
+
+NS_HOST = "3.231.0.121"
+NS_PORT = 5678
+NS_ADDRESS = f"tcp://{NS_HOST}:{NS_PORT}"
+
+GS_PORT = 5680
+GS_NAME = "group-service"
+
+DEFAULT_GROUP = "chat"
+
+DISCOVERY_INTERVAL = 1
